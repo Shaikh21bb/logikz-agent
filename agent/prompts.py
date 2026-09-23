@@ -1,4 +1,8 @@
-PLANNER_PROMPT = """You are a logistics and customs calculation expert. 
+from typing import List
+from .models import Plan, PlanStep, Decision, ToolName
+
+
+PLANNER_PROMPT = """You are a logistics and customs calculation expert.
 Given a user query about importing goods, create a step-by-step plan to answer it.
 
 Available tools:
@@ -6,11 +10,18 @@ Available tools:
 - calculate_customs_duties: Calculate customs duties and taxes
 - calculate_logistics_cost: Calculate shipping/logistics costs
 
-Analyze the user query and create a plan as a list of steps.
-Each step should be a clear action that uses one of the available tools.
+Analyze the user query and create a structured plan.
+Return ONLY a JSON object matching this schema:
+{{
+  "steps": [
+    {{"step": 1, "description": "Find HS code for servers", "tool": "search_tn_ved_database", "args": {{"query": "серверы"}}}},
+    {{"step": 2, "description": "Calculate customs duties for $50,000", "tool": "calculate_customs_duties", "args": {{"customs_value": 50000, "tn_ved": "8471"}}}},
+    {{"step": 3, "description": "Calculate logistics for 10 tons from China to Kazakhstan", "tool": "calculate_logistics_cost", "args": {{"weight_kg": 10000, "transport_type": "rail"}}}},
+    {{"step": 4, "description": "Compile final answer", "tool": "final_answer", "args": {{}}}}
+  ],
+  "reasoning": "Brief reasoning for the plan"
+}}"""
 
-Return ONLY a JSON array of strings, e.g.:
-["Find HS code for servers", "Calculate customs duties for $50,000", "Calculate logistics for 10 tons from China to Kazakhstan", "Compile final answer"]"""
 
 DECISION_PROMPT = """You are an agent that decides which tool to call next based on the current plan and observations.
 
@@ -18,19 +29,23 @@ Current plan: {plan}
 Completed steps: {completed_steps}
 Observations: {observations}
 
-Decide the next tool to call. Return ONLY a JSON object with:
-- "tool": tool name (search_tn_ved_database, calculate_customs_duties, calculate_logistics_cost, or "final_answer")
-- "args": arguments for the tool
-- "reason": brief reason for this choice
+Decide the next tool to call. Return ONLY a JSON object matching this schema:
+{{
+  "tool": "search_tn_ved_database" | "calculate_customs_duties" | "calculate_logistics_cost" | "final_answer",
+  "args": {{}},
+  "reason": "brief reason for this choice",
+  "step_index": 0
+}}
 
 If all plan steps are complete, return tool: "final_answer" with args containing the compiled answer."""
+
 
 FINAL_ANSWER_PROMPT = """Compile a final answer for the user based on all observations.
 
 User query: {user_query}
 Observations: {observations}
 
-Format the answer as:
+Format the answer EXACTLY as:
 📦 Товар: [product name]
 🏷 ТН ВЭД: [HS code]
 💰 Стоимость товара: [value]
@@ -41,9 +56,24 @@ Format the answer as:
 💵 Итого: [total]
 Источник данных: [Demo / Mock]"""
 
+
 EXECUTION_TRACES = {
-    "search_tn_ved_database": "🔎 Определяю категорию товара...\n📦 Проверяю ТН ВЭД...",
-    "calculate_customs_duties": "💰 Рассчитываю таможенные платежи...",
-    "calculate_logistics_cost": "🚚 Рассчитываю логистику...",
-    "final_answer": "✅ Формирую результат..."
+    ToolName.SEARCH_TN_VED: "🔎 Определяю категорию товара...\n📦 Проверяю ТН ВЭД...",
+    ToolName.CALCULATE_CUSTOMS: "💰 Рассчитываю таможенные платежи...",
+    ToolName.CALCULATE_LOGISTICS: "🚚 Рассчитываю логистику...",
+    ToolName.FINAL_ANSWER: "✅ Формирую результат...",
 }
+
+
+def format_plan_for_prompt(plan: Plan) -> str:
+    return "\n".join([f"{s.step}. {s.description} (tool: {s.tool.value if s.tool else 'none'})" for s in plan.steps])
+
+
+def format_observations_for_prompt(observations: List) -> str:
+    if not observations:
+        return "No observations yet."
+    lines = []
+    for i, obs in enumerate(observations):
+        status = "✅" if obs.success else "❌"
+        lines.append(f"{i+1}. {status} {obs.tool.value}: {obs.result if obs.success else obs.error}")
+    return "\n".join(lines)
